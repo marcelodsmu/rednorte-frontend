@@ -1,1 +1,1 @@
-Este es el proyecto frontend modificado por Andres.
+Este es el proyecto frontend modificado por Marcelo y Andres para RedNorte.
