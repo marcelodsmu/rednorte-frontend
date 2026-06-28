@@ -1,6 +1,10 @@
 import React, { useEffect, useState } from 'react';
+import { AdvancedFilters, ExportActions } from './components/Filters';
+import { EspecialidadChart, PacientesChart, ActivityChart } from './components/Charts';
+import { validateRUT, validateEmail, formatRUT, formatDate } from './utils/validators';
+import { exportToCSV, generateReport } from './utils/exporters';
 
-const emptyPaciente = { nombre: '', rut: '' };
+const emptyPaciente = { nombre: '', rut: '', email: '' };
 const emptyCita = { fecha: '', especialidad: '', idPaciente: '' };
 
 async function httpJson(url, options = {}) {
@@ -55,13 +59,17 @@ const Toast = ({ message, type, visible }) => {
   );
 };
 
-export const PacientesContainer = () => {
+export const PacientesContainer = ({ isDark }) => {
   const [pacientes, setPacientes] = useState([]);
   const [citas, setCitas] = useState([]);
   const [pacienteForm, setPacienteForm] = useState(emptyPaciente);
   const [citaForm, setCitaForm] = useState(emptyCita);
   const [searchPaciente, setSearchPaciente] = useState('');
   const [searchCita, setSearchCita] = useState('');
+  const [especialidadFilter, setEspecialidadFilter] = useState('');
+  const [fechaDesde, setFechaDesde] = useState('');
+  const [fechaHasta, setFechaHasta] = useState('');
+  const [filteredCitas, setFilteredCitas] = useState([]);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const [editingPaciente, setEditingPaciente] = useState(null);
@@ -70,6 +78,8 @@ export const PacientesContainer = () => {
   const [toastType, setToastType] = useState('');
   const [showToast, setShowToast] = useState(false);
   const [lastUpdated, setLastUpdated] = useState(null);
+  const [showCharts, setShowCharts] = useState(false);
+  const [validationErrors, setValidationErrors] = useState({});
 
   const showToastMsg = (msg, type = 'success') => {
     setToastMessage(msg);
@@ -88,6 +98,7 @@ export const PacientesContainer = () => {
       ]);
       setPacientes(Array.isArray(pacientesData) ? pacientesData : []);
       setCitas(Array.isArray(citasData) ? citasData : []);
+      setFilteredCitas(Array.isArray(citasData) ? citasData : []);
       setLastUpdated(new Date());
     } catch (err) {
       const msg = `No se pudo cargar la información: ${err.message}`;
@@ -102,12 +113,25 @@ export const PacientesContainer = () => {
     loadData();
   }, []);
 
+  // Validar paciente
+  const validatePaciente = (paciente) => {
+    const errors = {};
+    if (!paciente.nombre.trim()) errors.nombre = 'Nombre requerido';
+    if (!paciente.rut.trim()) errors.rut = 'RUT requerido';
+    if (paciente.rut && !validateRUT(paciente.rut)) errors.rut = 'RUT inválido';
+    if (paciente.email && !validateEmail(paciente.email)) errors.email = 'Email inválido';
+    return errors;
+  };
+
   const handleCreatePaciente = async (event) => {
     event.preventDefault();
-    if (!pacienteForm.nombre.trim() || !pacienteForm.rut.trim()) {
-      showToastMsg('Nombre y RUT son requeridos', 'error');
+    const errors = validatePaciente(pacienteForm);
+    if (Object.keys(errors).length > 0) {
+      setValidationErrors(errors);
+      showToastMsg('Hay errores en el formulario', 'error');
       return;
     }
+    setValidationErrors({});
     setError('');
     try {
       await httpJson('/api/pacientes', {
@@ -126,10 +150,13 @@ export const PacientesContainer = () => {
 
   const handleUpdatePaciente = async (event) => {
     event.preventDefault();
-    if (!editingPaciente.nombre.trim() || !editingPaciente.rut.trim()) {
-      showToastMsg('Nombre y RUT son requeridos', 'error');
+    const errors = validatePaciente(editingPaciente);
+    if (Object.keys(errors).length > 0) {
+      setValidationErrors(errors);
+      showToastMsg('Hay errores en el formulario', 'error');
       return;
     }
+    setValidationErrors({});
     setError('');
     try {
       await httpJson(`/api/pacientes/${editingPaciente.id}`, {
@@ -237,19 +264,37 @@ export const PacientesContainer = () => {
     }
   };
 
+  const handleExport = (type) => {
+    try {
+      if (type === 'pacientes') {
+        exportToCSV(pacientes, 'pacientes.csv');
+        showToastMsg('Pacientes exportados', 'success');
+      } else if (type === 'citas') {
+        exportToCSV(filteredCitas, 'citas.csv');
+        showToastMsg('Citas exportadas', 'success');
+      } else if (type === 'reporte') {
+        const report = generateReport(pacientes, citas);
+        exportToCSV([report], 'reporte.csv');
+        showToastMsg('Reporte generado', 'success');
+      }
+    } catch (err) {
+      showToastMsg(`Error al exportar: ${err.message}`, 'error');
+    }
+  };
+
   const filteredPacientes = pacientes.filter((p) =>
     p.nombre.toLowerCase().includes(searchPaciente.toLowerCase()) ||
     p.rut.toLowerCase().includes(searchPaciente.toLowerCase())
   );
 
-  const filteredCitas = citas.filter((c) =>
+  const defaultFilteredCitas = citas.filter((c) =>
     c.especialidad.toLowerCase().includes(searchCita.toLowerCase()) ||
     c.fecha.includes(searchCita)
   );
 
   const totalPacientes = pacientes.length;
   const totalCitas = citas.length;
-  const citasConPaciente = citas.filter((cita) => cita.idPaciente).length;
+  const citasProximas = citas.filter((cita) => new Date(cita.fecha) > new Date()).length;
   const formattedLastUpdated = lastUpdated
     ? new Intl.DateTimeFormat('es-CL', {
         hour: '2-digit',
@@ -273,15 +318,61 @@ export const PacientesContainer = () => {
           <span>Agenda operativa consolidada</span>
         </article>
         <article className="summary-card">
-          <p className="summary-label">Citas vinculadas</p>
-          <strong>{citasConPaciente}</strong>
-          <span>Entradas relacionadas con un paciente</span>
+          <p className="summary-label">Citas proximas</p>
+          <strong>{citasProximas}</strong>
+          <span>Agendadas para el futuro</span>
         </article>
         <article className="summary-card summary-card-soft">
           <p className="summary-label">Ultima sincronizacion</p>
           <strong>{formattedLastUpdated}</strong>
           <span>{loading ? 'Actualizando informacion...' : 'Datos listos para operar'}</span>
         </article>
+      </section>
+
+      <section className="card">
+        <div className="card-heading">
+          <div>
+            <p className="section-kicker">Herramientas</p>
+            <h2>Exportacion & Graficos</h2>
+          </div>
+        </div>
+        <div className="tools-section">
+          <ExportActions pacientes={pacientes} citas={citas} onExport={handleExport} />
+          <button className="btn-charts" onClick={() => setShowCharts(!showCharts)}>
+            {showCharts ? '📊 Ocultar graficos' : '📈 Mostrar graficos'}
+          </button>
+        </div>
+      </section>
+
+      {showCharts && (
+        <>
+          <section className="charts-section">
+            <EspecialidadChart citas={citas} />
+            <PacientesChart pacientes={pacientes} citas={citas} />
+          </section>
+          <section className="charts-section">
+            <ActivityChart lastUpdated={lastUpdated} />
+          </section>
+        </>
+      )}
+
+      <section className="card">
+        <div className="card-heading">
+          <div>
+            <p className="section-kicker">Filtros avanzados</p>
+            <h2>Citas</h2>
+          </div>
+        </div>
+        <AdvancedFilters
+          citas={citas}
+          onFilter={setFilteredCitas}
+          especialidadFilter={especialidadFilter}
+          setEspecialidadFilter={setEspecialidadFilter}
+          fechaDesde={fechaDesde}
+          setFechaDesde={setFechaDesde}
+          fechaHasta={fechaHasta}
+          setFechaHasta={setFechaHasta}
+        />
       </section>
 
       <section className="card">
@@ -295,18 +386,26 @@ export const PacientesContainer = () => {
         </div>
 
         <form className="inline-form" onSubmit={handleCreatePaciente}>
-          <input
-            value={pacienteForm.nombre}
-            onChange={(e) => setPacienteForm({ ...pacienteForm, nombre: e.target.value })}
-            placeholder="Nombre completo"
-            required
-          />
-          <input
-            value={pacienteForm.rut}
-            onChange={(e) => setPacienteForm({ ...pacienteForm, rut: e.target.value })}
-            placeholder="RUT"
-            required
-          />
+          <div className="form-field">
+            <input
+              value={pacienteForm.nombre}
+              onChange={(e) => setPacienteForm({ ...pacienteForm, nombre: e.target.value })}
+              placeholder="Nombre completo"
+              className={validationErrors.nombre ? 'error' : ''}
+              required
+            />
+            {validationErrors.nombre && <span className="error-text">{validationErrors.nombre}</span>}
+          </div>
+          <div className="form-field">
+            <input
+              value={pacienteForm.rut}
+              onChange={(e) => setPacienteForm({ ...pacienteForm, rut: e.target.value })}
+              placeholder="RUT (12345678-9)"
+              className={validationErrors.rut ? 'error' : ''}
+              required
+            />
+            {validationErrors.rut && <span className="error-text">{validationErrors.rut}</span>}
+          </div>
           <button type="submit">➕ Crear</button>
         </form>
 
@@ -323,7 +422,7 @@ export const PacientesContainer = () => {
             <li key={paciente.id}>
               <div className="list-copy">
                 <strong>{paciente.nombre}</strong>
-                <span>RUT: {paciente.rut}</span>
+                <span>RUT: {formatRUT(paciente.rut)}</span>
               </div>
               <div className="actions">
                 <button className="edit-btn" onClick={() => setEditingPaciente(paciente)}>
@@ -351,7 +450,7 @@ export const PacientesContainer = () => {
             <h2>Citas</h2>
             <p className="section-copy">Organiza la agenda medica y relaciona cada cita con su paciente.</p>
           </div>
-          <span className="count-pill count-pill-alt">{filteredCitas.length}</span>
+          <span className="count-pill count-pill-alt">{(showCharts ? filteredCitas : defaultFilteredCitas).length}</span>
         </div>
 
         <form className="inline-form" onSubmit={handleCreateCita}>
@@ -391,11 +490,11 @@ export const PacientesContainer = () => {
         />
 
         <ul className="data-list">
-          {filteredCitas.map((cita) => (
+          {(showCharts ? filteredCitas : defaultFilteredCitas).map((cita) => (
             <li key={cita.id}>
               <div className="list-copy">
                 <strong>{cita.especialidad}</strong>
-                <span>{cita.fecha}</span>
+                <span>{formatDate(cita.fecha)}</span>
               </div>
               <div className="actions">
                 <button className="edit-btn" onClick={() => setEditingCita(cita)}>
@@ -407,7 +506,7 @@ export const PacientesContainer = () => {
               </div>
             </li>
           ))}
-          {!filteredCitas.length && (
+          {!(showCharts ? filteredCitas : defaultFilteredCitas).length && (
             <li className="empty empty-rich">
               <strong>No hay citas agendadas</strong>
               <span>Programa una nueva cita o revisa el criterio de busqueda actual.</span>
