@@ -26,3 +26,16 @@ dist-ssr
 # Playwright generated reports
 playwright-report/
 test-results/
+
+# Evidencias y artefactos no de codigo
+pdf/
+evidencias/
+artifacts/
+coverage/
+*.pdf
+*.ppt
+*.pptx
+*.zip
+*.mp4
+*.mov
+*.avi
